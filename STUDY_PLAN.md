@@ -72,6 +72,87 @@ If a topic takes longer, protect the mandatory deliverables: skip the optional f
 - [ ] You can explain mint permissions and the basic security choices in a code review.
 - [ ] No real funds are needed; no wallet secret is committed.
 
+## Simple architecture
+
+Keep the project as a few pieces with explicit links between them. Only the contract and its ownership state live on the blockchain; the artwork and JSON metadata live in distributed storage, and the contract stores or returns the metadata URI.
+
+```mermaid
+flowchart LR
+  A[Artwork file] -->|upload and pin| B[IPFS image CID]
+  B -->|image URI in JSON| C[IPFS metadata CID]
+  C -->|tokenURI set during mint| D[ERC-721 contract on testnet]
+  E[Your test wallet] -->|authorized mint transaction| D
+  D -->|ownerOf token ID| E
+  F[Wallet, Remix, or explorer] -->|reads tokenURI and ownerOf| D
+  F -->|resolves metadata and image| C
+```
+
+Suggested repository responsibilities:
+
+| Location | Put here | Keep out |
+|---|---|---|
+| `code/` | Contract source, comments, and any small contract-focused notes | Private keys, unrelated app code |
+| `deployment/` | Reproducible deploy instructions/scripts, compiler/tool versions, network configuration template | Real credentials or hidden assumptions about a developer machine |
+| `mint/` | Mint instructions/script, token ID/address/network record, metadata URI | Seed phrases or private keys |
+| `documentation/` | Architecture, metadata example, security/permission explanation, verification walkthrough | Claims that were not actually checked |
+| Root `README.md` | Project choices, prerequisites, exact steps, links, deployed testnet details | Secrets or vague instructions such as “deploy the contract” without steps |
+
+For this scope, use one contract and one mint path. A website is unnecessary: Remix and a block explorer can demonstrate the required behavior. Store network name and chain ID together to reduce the chance of interacting with the wrong chain.
+
+## Architecture and implementation best practices
+
+- **Keep the contract small.** Implement only the required NFT behavior. Avoid marketplace functions, royalties, upgradeability, custom role frameworks, and a minting website unless the mandatory path already works and the extra feature is explicitly needed.
+- **Use a standard implementation.** Build on the current compatible OpenZeppelin ERC-721 implementation rather than writing token ownership, transfer, approval, or receiver logic yourself. Pin/document the OpenZeppelin and compiler versions you used.
+- **Choose the simplest metadata approach.** Set a metadata URI at mint time. For one token, a token URI passed to a safe mint function is easier to reason about than a general-purpose mutable metadata system. Do not add URI update powers unless required; if you do, explain who can use them and when.
+- **Make mint permissions obvious.** State whether only the deployer/contract owner can mint or whether anyone can mint. For a single assignment NFT, one restricted mint is easy to demonstrate. Avoid “owner” ambiguity by naming the role clearly and documenting how it is set.
+- **Separate content from references.** Upload and pin the image first, then create metadata JSON that points to its `ipfs://` URI, then upload/pin that JSON. Put the metadata URI in the NFT. Do not put a temporary gateway URL into the JSON when an IPFS URI is appropriate.
+- **Keep deployment reproducible.** Record compiler version, library version, network name, chain ID, deployer address (public address only), contract address, transaction hash, token ID, and metadata URI. Keep secrets local and provide placeholder config only.
+- **Make claims verifiable.** Link to the testnet explorer transaction/contract and state exactly how to call `ownerOf(tokenId)` and `tokenURI(tokenId)`. An explorer display may be delayed or lack metadata support, so also demonstrate the URI and contract reads directly.
+- **Document limits honestly.** IPFS is content-addressed, but availability depends on keeping content pinned. A testnet NFT is a learning artifact and does not establish copyright or guarantee permanent marketplace display.
+
+## Common errors to anticipate
+
+| Symptom | Likely cause | What to check or do |
+|---|---|---|
+| Contract will not compile | Solidity pragma/compiler mismatch, incompatible OpenZeppelin version, typo in import path, or copied code targeting another library release | Match the compiler to the `pragma`; use docs/examples for the same OpenZeppelin major version; read the first compiler error before changing multiple things. |
+| `Ownable` constructor error | OpenZeppelin version expects an initial owner constructor argument | Check the imported version’s API and pass the intended deployer/owner as required. Do not copy constructor syntax from a different version. |
+| Transaction says insufficient funds | Wallet is on the wrong network, has no test token, or the selected account is different | Check network name and chain ID in the wallet and Remix; fund only with the official testnet faucet. |
+| Transaction is pending or disappears | RPC congestion, wallet switched networks, low testnet fee, or explorer delay | Check the transaction hash on the correct chain’s explorer; avoid repeatedly submitting the same action before understanding its state. |
+| Mint reverts with an authorization error | Connected account is not the authorized minter/owner, or the contract’s permission rule is wrong | Compare the active account to the contract owner; test both allowed and forbidden callers on the local VM before redeploying. |
+| “Token already minted” or invalid token error | The chosen token ID has already been used, or `ownerOf` is being called before mint | Confirm the token ID and mint event; remember that `ownerOf` reverts for a nonexistent token. |
+| NFT exists but image/metadata is blank | Wrong token URI, malformed JSON, missing `image` field, wrong CID/path, or content not pinned | Read `tokenURI` from the deployed contract; open the metadata JSON; then open its image URI; check spelling, JSON syntax, and pin status at each step. |
+| Metadata works through a gateway but not `ipfs://` | The viewer handles URI schemes differently or is slow to index | Preserve and document the canonical `ipfs://` URI, test a gateway URL separately, and show direct contract/JSON evidence. Do not change the on-chain URI blindly. |
+| Source verification does not match deployed contract | Wrong network/address or different compiler, optimization, or library settings | Confirm the exact deployed address/network and match compiler settings when verifying source. |
+| Documentation address points to no contract | Copied wrong address or mixed testnet/mainnet details | Copy address from the successful deployment transaction and include network name/chain ID beside it; test every link. |
+| Works in Remix VM but fails on testnet | VM account, network, constructor inputs, gas, or deployed code differs | Recheck the selected wallet account/network, deployment inputs, compiler settings, and transaction receipt; record the exact final deployment. |
+
+## Security practices for this project
+
+This is a learning project, but use safe habits from the start:
+
+- Use a **fresh test wallet** with no valuable assets. A testnet protects funds from real-value loss, but careless signing can still expose secrets or confuse accounts.
+- Never share or commit a seed phrase, private key, wallet export, API token, or provider secret. Do not paste one into chat, screenshots, README files, or source control. If one is exposed, treat it as compromised and replace it.
+- Use the official chain documentation for network/RPC/faucet links. Be suspicious of sponsored search results, unsolicited wallet support, and “claim” links asking for a seed phrase.
+- Read transaction details before signing: network, target contract, function, token URI/recipient, and requested permissions. Do not sign unknown messages or approvals just to make a demo work.
+- Restrict minting intentionally. If the contract should only mint once, enforce that in contract state, rather than relying on a README or a promise not to call the function again. Test repeated mint attempts.
+- Use OpenZeppelin’s safe minting method so contracts receiving an NFT can reject tokens they cannot handle. Do not implement ERC-721 transfer/approval internals yourself.
+- Keep admin powers minimal. Avoid owner-controlled arbitrary transfers, unlimited minting, upgradeability, pausing, and metadata replacement unless the assignment needs them. Every extra privilege needs a clear reason and a test.
+- Treat uploaded metadata/image as public and effectively immutable once referenced by a minted NFT. Do not upload personal or confidential information. Keep local source copies and pin the content.
+- Do not claim IPFS guarantees permanent storage. Check pinning/availability and include both the CID/URI and a gateway link for practical review.
+- Before submitting, inspect tracked files for `.env`, wallet files, seed phrases, private keys, and API credentials. If a secret was committed, removing the latest copy is not enough: rotate/revoke it and clean repository history as appropriate.
+- Deploy only to the intended test network. Confirm chain ID in wallet and deployment tool before signing; do not reuse the testnet deployment instructions with mainnet funds.
+
+### Minimum contract checks before testnet deployment
+
+- [ ] Correct account can mint the intended token.
+- [ ] A disallowed account cannot mint.
+- [ ] The token cannot be minted twice if only one token is intended.
+- [ ] `ownerOf(tokenId)` returns the expected recipient after mint.
+- [ ] `tokenURI(tokenId)` returns the exact metadata URI that was uploaded.
+- [ ] A nonexistent token ID causes the expected read failure; it does not return a misleading owner.
+- [ ] You can explain every privileged function and who can call it.
+- [ ] No upgrade, withdrawal, arbitrary transfer, or metadata-edit capability exists without a documented requirement.
+
 ## Good beginner resources
 
 Prefer official documentation for setup details because network names, tools, and faucets may change. Use tutorials for concepts, then verify commands against the current official docs.
